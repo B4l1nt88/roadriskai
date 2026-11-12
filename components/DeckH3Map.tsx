@@ -3,23 +3,34 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import Map, { NavigationControl, useControl } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import * as h3 from 'h3-js';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
+import { PolygonLayer, TextLayer } from '@deck.gl/layers';
 import type { PickingInfo } from '@deck.gl/core';
 import type { H3CellRecord } from '@/lib/feature-engineering';
-import { Layers, Box, Compass } from 'lucide-react';
+import { Layers, Box, Compass, Hash } from 'lucide-react';
 
 const CARTO_DARK_MATTER =
   'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
+/**
+ * Use interleaved: false so Deck.gl renders on a dedicated WebGL canvas directly
+ * above MapLibre GL v4 (prevents WebGL2 context incompatibility in MapLibre v4).
+ */
 function DeckGLOverlay(props: { layers: unknown[] }) {
-  const overlay = useControl<MapboxOverlay>(() => new MapboxOverlay({ interleaved: true }));
+  const overlay = useControl<MapboxOverlay>(
+    () => new MapboxOverlay({ interleaved: false })
+  );
   overlay.setProps({ layers: props.layers as never[] });
   return null;
 }
 
-export function riskToRgba(risk: number, isSelected: boolean): [number, number, number, number] {
-  const alpha = isSelected ? 235 : 185;
+export function riskToRgba(
+  risk: number,
+  isSelected: boolean
+): [number, number, number, number] {
+  const alpha = isSelected ? 240 : 190;
   if (risk >= 0.65) return [239, 68, 68, alpha]; // Critical Red
   if (risk >= 0.45) return [249, 115, 22, alpha]; // High Orange
   if (risk >= 0.25) return [234, 179, 8, alpha]; // Elevated Amber
@@ -44,10 +55,12 @@ export default function DeckH3Map({
   const [viewState, setViewState] = useState({
     longitude: 19.054,
     latitude: 47.498,
-    zoom: 12.2,
-    pitch: extruded3D ? 48 : 0,
-    bearing: extruded3D ? -12 : 0,
+    zoom: 12.4,
+    pitch: extruded3D ? 45 : 0,
+    bearing: extruded3D ? -10 : 0,
   });
+
+  const [showRiskLabels, setShowRiskLabels] = useState<boolean>(true);
 
   const [hoverInfo, setHoverInfo] = useState<{
     x: number;
@@ -60,8 +73,8 @@ export default function DeckH3Map({
     onToggle3D();
     setViewState((prev) => ({
       ...prev,
-      pitch: next3D ? 48 : 0,
-      bearing: next3D ? -12 : 0,
+      pitch: next3D ? 45 : 0,
+      bearing: next3D ? -10 : 0,
     }));
   }, [extruded3D, onToggle3D]);
 
@@ -69,14 +82,42 @@ export default function DeckH3Map({
     setViewState({
       longitude: 19.054,
       latitude: 47.498,
-      zoom: 12.2,
-      pitch: extruded3D ? 48 : 0,
-      bearing: extruded3D ? -12 : 0,
+      zoom: 12.4,
+      pitch: extruded3D ? 45 : 0,
+      bearing: extruded3D ? -10 : 0,
     });
   }, [extruded3D]);
 
+  // Precompute [lng, lat] polygon boundaries from h3.cellToBoundary(h, true)
+  const cellsWithBoundaries = useMemo(() => {
+    return cells.map((cell) => {
+      let polygon: [number, number][] = [];
+      try {
+        polygon = h3.cellToBoundary(cell.h3_index, true) as [number, number][];
+      } catch {
+        polygon = [];
+      }
+      return {
+        ...cell,
+        polygon,
+      };
+    });
+  }, [cells]);
+
+  // Show text labels for visible cells (all cells when zoomed in >= 12.3, or top/elevated risk cells when zoomed out)
+  const labelCells = useMemo(() => {
+    if (!showRiskLabels) return [];
+    if (viewState.zoom >= 12.3) {
+      return cellsWithBoundaries;
+    }
+    return cellsWithBoundaries.filter(
+      (c, idx) => idx < 35 || c.risk_score >= 0.35 || c.h3_index === selectedCell?.h3_index
+    );
+  }, [cellsWithBoundaries, showRiskLabels, viewState.zoom, selectedCell]);
+
   const layers = useMemo(() => {
-    return [
+    const activeLayers: unknown[] = [
+      // Primary H3 Hexagon Layer + PolygonLayer guarantee crisp rendering across all GPU/WebGL setups
       new H3HexagonLayer<H3CellRecord>({
         id: 'budapest-h3-risk-layer',
         data: cells,
@@ -90,9 +131,9 @@ export default function DeckH3Map({
         getLineColor: (d) =>
           selectedCell?.h3_index === d.h3_index
             ? [255, 255, 255, 255]
-            : [15, 23, 42, 160],
+            : [15, 23, 42, 190],
         lineWidthMinPixels: 1.5,
-        getElevation: (d) => (extruded3D ? Math.max(25, d.risk_score * 950) : 0),
+        getElevation: (d) => (extruded3D ? Math.max(25, d.risk_score * 850) : 0),
         elevationScale: 1,
         updateTriggers: {
           getFillColor: [selectedCell?.h3_index, cells],
@@ -123,8 +164,105 @@ export default function DeckH3Map({
           }
         },
       }),
+      new PolygonLayer<(typeof cellsWithBoundaries)[number]>({
+        id: 'budapest-h3-polygon-fallback-layer',
+        data: cellsWithBoundaries,
+        pickable: true,
+        stroked: true,
+        filled: true,
+        wireframe: extruded3D,
+        extruded: extruded3D,
+        getPolygon: (d) => d.polygon,
+        getFillColor: (d) =>
+          riskToRgba(d.risk_score, selectedCell?.h3_index === d.h3_index),
+        getLineColor: (d) =>
+          selectedCell?.h3_index === d.h3_index
+            ? [255, 255, 255, 255]
+            : [15, 23, 42, 200],
+        lineWidthMinPixels: 1.5,
+        getElevation: (d) => (extruded3D ? Math.max(25, d.risk_score * 850) : 0),
+        elevationScale: 1,
+        updateTriggers: {
+          getFillColor: [selectedCell?.h3_index, cellsWithBoundaries],
+          getLineColor: [selectedCell?.h3_index],
+          getElevation: [extruded3D, cellsWithBoundaries],
+        },
+        onHover: (info: PickingInfo) => {
+          if (info.object) {
+            setHoverInfo({
+              x: info.x,
+              y: info.y,
+              object: info.object as H3CellRecord,
+            });
+          } else {
+            setHoverInfo(null);
+          }
+        },
+        onClick: (info: PickingInfo) => {
+          if (info.object) {
+            const cell = info.object as H3CellRecord;
+            onSelectCell(cell);
+            setViewState((prev) => ({
+              ...prev,
+              longitude: cell.center_lng,
+              latitude: cell.center_lat,
+              zoom: Math.max(prev.zoom, 13.2),
+            }));
+          }
+        },
+      }),
     ];
-  }, [cells, extruded3D, selectedCell, onSelectCell]);
+
+    if (showRiskLabels && labelCells.length > 0) {
+      activeLayers.push(
+        new TextLayer<(typeof cellsWithBoundaries)[number]>({
+          id: 'budapest-h3-risk-value-labels',
+          data: labelCells,
+          pickable: false,
+          getPosition: (d) => [
+            d.center_lng,
+            d.center_lat,
+            extruded3D ? Math.max(25, d.risk_score * 850) + 18 : 5,
+          ],
+          getText: (d) => `${Math.round(d.risk_score * 100)}%`,
+          getSize: (d) =>
+            selectedCell?.h3_index === d.h3_index || d.risk_score >= 0.45 ? 13 : 11,
+          getColor: [255, 255, 255, 245],
+          fontWeight: 'bold',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          getTextAnchor: 'middle',
+          getAlignmentBaseline: 'center',
+          billboard: true,
+          background: true,
+          getBackgroundColor: (d) =>
+            d.risk_score >= 0.65
+              ? [127, 29, 29, 215]
+              : d.risk_score >= 0.45
+              ? [124, 45, 18, 215]
+              : d.risk_score >= 0.25
+              ? [113, 63, 18, 205]
+              : [6, 78, 59, 195],
+          backgroundPadding: [4, 2],
+          updateTriggers: {
+            getPosition: [extruded3D, labelCells],
+            getText: [labelCells],
+            getSize: [selectedCell?.h3_index, labelCells],
+            getBackgroundColor: [labelCells],
+          },
+        })
+      );
+    }
+
+    return activeLayers;
+  }, [
+    cells,
+    cellsWithBoundaries,
+    labelCells,
+    extruded3D,
+    selectedCell,
+    showRiskLabels,
+    onSelectCell,
+  ]);
 
   return (
     <div className="relative w-full h-full bg-[#090d16] overflow-hidden select-none">
@@ -138,8 +276,8 @@ export default function DeckH3Map({
         <NavigationControl position="bottom-right" />
       </Map>
 
-      {/* Top-Left Floating Controls (2D / 3D Extrusion Toggle & Reset) */}
-      <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+      {/* Top-Left Floating Controls (2D / 3D Extrusion Toggle, Value Labels & Reset) */}
+      <div className="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-2">
         <button
           onClick={handleToggleExtrusion}
           className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
@@ -150,6 +288,19 @@ export default function DeckH3Map({
         >
           {extruded3D ? <Box className="w-4 h-4" /> : <Layers className="w-4 h-4" />}
           <span>{extruded3D ? '3D Extrudált H3 Nézet' : '2D Sík H3 Nézet'}</span>
+        </button>
+
+        <button
+          onClick={() => setShowRiskLabels((prev) => !prev)}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
+            showRiskLabels
+              ? 'bg-emerald-600/90 border-emerald-400 text-white'
+              : 'bg-slate-900/90 border-slate-700 text-slate-300 hover:bg-slate-800'
+          }`}
+          title="Kockázati % értékek megjelenítése a hexagonokon"
+        >
+          <Hash className="w-3.5 h-3.5" />
+          <span>Kockázati % Értékek</span>
         </button>
 
         <button
@@ -193,7 +344,10 @@ export default function DeckH3Map({
         <div
           className="pointer-events-none absolute z-20 w-72 bg-slate-950/95 border border-slate-700/90 rounded-xl p-3.5 shadow-2xl text-xs backdrop-blur-md"
           style={{
-            left: Math.min(hoverInfo.x + 14, typeof window !== 'undefined' ? window.innerWidth - 300 : hoverInfo.x + 14),
+            left: Math.min(
+              hoverInfo.x + 14,
+              typeof window !== 'undefined' ? window.innerWidth - 300 : hoverInfo.x + 14
+            ),
             top: Math.max(hoverInfo.y - 20, 12),
           }}
         >
@@ -250,4 +404,3 @@ export default function DeckH3Map({
     </div>
   );
 }
-
