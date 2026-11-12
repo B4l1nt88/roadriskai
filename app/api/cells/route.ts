@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getGridCellsAndStats } from '@/lib/h3-store';
 import { hasOnnxModelBinary } from '@/lib/onnx-inference';
+import { readOsmInfrastructure } from '@/lib/osm-overpass';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,6 +9,7 @@ export async function GET() {
   try {
     const data = await getGridCellsAndStats();
     const modelStatus = hasOnnxModelBinary();
+    const infrastructure = readOsmInfrastructure();
 
     const totalVehicles = data.cells.reduce((acc, c) => acc + (c.bkk_vehicle_count || 0), 0);
     const avgRisk =
@@ -22,6 +24,7 @@ export async function GET() {
       prediction_runs: data.prediction_runs,
       storage_mode: data.storage_mode,
       model_status: modelStatus,
+      infrastructure,
       summary: {
         total_cells: data.cells.length,
         active_bkk_vehicles: totalVehicles,

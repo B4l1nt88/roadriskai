@@ -4,6 +4,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import AnalyticsSidebar from '@/components/AnalyticsSidebar';
 import type { H3CellRecord, WeatherTelemetry } from '@/lib/feature-engineering';
+import type { BudapestOsmInfrastructure } from '@/lib/osm-overpass';
 
 const DeckH3Map = dynamic(() => import('@/components/DeckH3Map'), {
   ssr: false,
@@ -20,6 +21,8 @@ const DeckH3Map = dynamic(() => import('@/components/DeckH3Map'), {
 export default function HomePage() {
   const [cells, setCells] = useState<H3CellRecord[]>([]);
   const [weather, setWeather] = useState<WeatherTelemetry | null>(null);
+  const [infrastructure, setInfrastructure] =
+    useState<BudapestOsmInfrastructure | null>(null);
   const [selectedCell, setSelectedCell] = useState<H3CellRecord | null>(null);
   const [extruded3D, setExtruded3D] = useState<boolean>(true);
   const [minRiskFilter, setMinRiskFilter] = useState<number>(0);
@@ -34,6 +37,9 @@ export default function HomePage() {
         setCells(data.cells);
         setWeather(data.weather || null);
         setStorageMode(data.storage_mode || 'local-fallback');
+        if (data.infrastructure) {
+          setInfrastructure(data.infrastructure);
+        }
       }
     } catch {
       // Keep current state on network error
@@ -67,6 +73,7 @@ export default function HomePage() {
       <div className="flex-1 h-[55vh] lg:h-full relative">
         <DeckH3Map
           cells={filteredCells}
+          infrastructure={infrastructure}
           selectedCell={selectedCell}
           onSelectCell={setSelectedCell}
           extruded3D={extruded3D}
@@ -89,4 +96,3 @@ export default function HomePage() {
     </main>
   );
 }
-

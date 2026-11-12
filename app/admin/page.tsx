@@ -20,6 +20,8 @@ import {
   Radio,
   KeyRound,
   ShieldAlert,
+  Route,
+  Globe,
 } from 'lucide-react';
 
 const SAMPLE_BUDAPEST_ACCIDENTS_CSV = `lat,lng,occurred_at,is_wet_road,severity,osm_tram_tracks,osm_intersection_count,label
@@ -57,6 +59,8 @@ export default function AdminPortalPage() {
   const [isRunningCron, setIsRunningCron] = useState(false);
   const [isUploadingModel, setIsUploadingModel] = useState(false);
   const [isSyncingIncidents, setIsSyncingIncidents] = useState(false);
+  const [isSyncingOsm, setIsSyncingOsm] = useState(false);
+  const [isExpandingBudapest, setIsExpandingBudapest] = useState(false);
   const [tomtomApiKeyInput, setTomtomApiKeyInput] = useState('');
   const [syncReports, setSyncReports] = useState<
     Array<{ source: string; fetched_count: number; details: string[] }>
@@ -210,6 +214,39 @@ export default function AdminPortalPage() {
       });
     } finally {
       setIsSyncingIncidents(false);
+    }
+  };
+
+  const handleOsmNetworkAction = async (
+    action: 'sync-osm' | 'expand-full-budapest'
+  ) => {
+    if (action === 'sync-osm') setIsSyncingOsm(true);
+    else setIsExpandingBudapest(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/admin/osm-network', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setStatusMessage({ type: 'success', text: data.message });
+        await loadDashboardData();
+      } else {
+        setStatusMessage({
+          type: 'error',
+          text: data.error || 'OSM / H3 művelet sikertelen.',
+        });
+      }
+    } catch (err: unknown) {
+      setStatusMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Hálózati hiba.',
+      });
+    } finally {
+      setIsSyncingOsm(false);
+      setIsExpandingBudapest(false);
     }
   };
 
@@ -414,6 +451,45 @@ export default function AdminPortalPage() {
               ))}
             </div>
           )}
+
+          {/* Sub-bar: Full Budapest Polygon Coverage & Live OpenStreetMap Overpass Sync */}
+          <div className="border-t border-slate-800/90 pt-4 mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="text-xs text-slate-300">
+              <strong className="text-white">Teljes Úthálózat &amp; Csomópont Figyelés:</strong>{' '}
+              OpenStreetMap Overpass API (<code className="text-amber-300">railway=tram</code>,{' '}
+              <code className="text-cyan-300">highway=traffic_signals</code>,{' '}
+              <code className="text-sky-300">maxspeed</code>) +{' '}
+              <code className="text-indigo-300">h3.polygonToCells(budapestBoundary, 8)</code>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <button
+                onClick={() => handleOsmNetworkAction('sync-osm')}
+                disabled={isSyncingOsm}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200 transition disabled:opacity-50"
+              >
+                <Route className="w-4 h-4 text-amber-400" />
+                <span>
+                  {isSyncingOsm
+                    ? 'Overpass API lekérdezés...'
+                    : 'OSM Főutak, Villamossínek & Csomópontok Szinkronizálása'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => handleOsmNetworkAction('expand-full-budapest')}
+                disabled={isExpandingBudapest}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-cyan-600/25 hover:bg-cyan-600/40 border border-cyan-400/40 text-cyan-200 transition disabled:opacity-50"
+              >
+                <Globe className="w-4 h-4 text-cyan-400" />
+                <span>
+                  {isExpandingBudapest
+                    ? 'Teljes Budapest H3 generálása...'
+                    : 'Teljes Budapest Lefedettség (~1 000 H3 Hex)'}
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* 3-Column Action Cards */}

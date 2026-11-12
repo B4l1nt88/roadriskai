@@ -22,8 +22,47 @@ declare module '@deck.gl/mapbox' {
 declare module '@deck.gl/layers' {
   import type { PickingInfo } from '@deck.gl/core';
 
+  export interface ScatterplotLayerProps<DataT = any> {
+    id: string;
+    data: DataT[];
+    pickable?: boolean;
+    filled?: boolean;
+    stroked?: boolean;
+    radiusScale?: number;
+    radiusMinPixels?: number;
+    radiusMaxPixels?: number;
+    lineWidthMinPixels?: number;
+    getPosition?: (d: DataT) => [number, number] | [number, number, number];
+    getRadius?: number | ((d: DataT) => number);
+    getFillColor?: [number, number, number, number] | ((d: DataT) => [number, number, number, number]);
+    getLineColor?: [number, number, number, number] | ((d: DataT) => [number, number, number, number]);
+    updateTriggers?: Record<string, any>;
+    onHover?: (info: PickingInfo<DataT>) => void;
+    onClick?: (info: PickingInfo<DataT>) => void;
+  }
+
   export class ScatterplotLayer<DataT = any> {
-    constructor(props: Record<string, any>);
+    constructor(props: ScatterplotLayerProps<DataT>);
+  }
+
+  export interface PathLayerProps<DataT = any> {
+    id: string;
+    data: DataT[];
+    pickable?: boolean;
+    widthScale?: number;
+    widthMinPixels?: number;
+    widthMaxPixels?: number;
+    jointRounded?: boolean;
+    capRounded?: boolean;
+    getPath?: (d: DataT) => [number, number][];
+    getColor?: [number, number, number, number] | ((d: DataT) => [number, number, number, number]);
+    getWidth?: number | ((d: DataT) => number);
+    updateTriggers?: Record<string, any>;
+    onHover?: (info: PickingInfo<DataT>) => void;
+  }
+
+  export class PathLayer<DataT = any> {
+    constructor(props: PathLayerProps<DataT>);
   }
 
   export interface PolygonLayerProps<DataT = any> {

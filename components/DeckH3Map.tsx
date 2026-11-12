@@ -1,23 +1,38 @@
 'use client';
 
 import React, { useState, useMemo, useCallback } from 'react';
-import Map, { NavigationControl, useControl } from 'react-map-gl/maplibre';
+import MapComponent, { NavigationControl, useControl } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import * as h3 from 'h3-js';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
-import { PolygonLayer, TextLayer } from '@deck.gl/layers';
+import {
+  PolygonLayer,
+  TextLayer,
+  PathLayer,
+  ScatterplotLayer,
+} from '@deck.gl/layers';
 import type { PickingInfo } from '@deck.gl/core';
 import type { H3CellRecord } from '@/lib/feature-engineering';
-import { Layers, Box, Compass, Hash } from 'lucide-react';
+import type {
+  BudapestOsmInfrastructure,
+  OsmRoadLine,
+  OsmTramLine,
+  OsmIntersectionNode,
+} from '@/lib/osm-overpass';
+import {
+  Layers,
+  Box,
+  Compass,
+  Hash,
+  Route,
+  TrainTrack,
+  GitFork,
+} from 'lucide-react';
 
 const CARTO_DARK_MATTER =
   'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
-/**
- * Use interleaved: false so Deck.gl renders on a dedicated WebGL canvas directly
- * above MapLibre GL v4 (prevents WebGL2 context incompatibility in MapLibre v4).
- */
 function DeckGLOverlay(props: { layers: unknown[] }) {
   const overlay = useControl<MapboxOverlay>(
     () => new MapboxOverlay({ interleaved: false })
@@ -30,7 +45,7 @@ export function riskToRgba(
   risk: number,
   isSelected: boolean
 ): [number, number, number, number] {
-  const alpha = isSelected ? 240 : 190;
+  const alpha = isSelected ? 240 : 185;
   if (risk >= 0.65) return [239, 68, 68, alpha]; // Critical Red
   if (risk >= 0.45) return [249, 115, 22, alpha]; // High Orange
   if (risk >= 0.25) return [234, 179, 8, alpha]; // Elevated Amber
@@ -39,6 +54,7 @@ export function riskToRgba(
 
 interface DeckH3MapProps {
   cells: H3CellRecord[];
+  infrastructure?: BudapestOsmInfrastructure | null;
   selectedCell: H3CellRecord | null;
   onSelectCell: (cell: H3CellRecord | null) => void;
   extruded3D: boolean;
@@ -47,6 +63,7 @@ interface DeckH3MapProps {
 
 export default function DeckH3Map({
   cells,
+  infrastructure,
   selectedCell,
   onSelectCell,
   extruded3D,
@@ -61,6 +78,9 @@ export default function DeckH3Map({
   });
 
   const [showRiskLabels, setShowRiskLabels] = useState<boolean>(true);
+  const [showRoadNetwork, setShowRoadNetwork] = useState<boolean>(true);
+  const [showTramNetwork, setShowTramNetwork] = useState<boolean>(true);
+  const [showIntersections, setShowIntersections] = useState<boolean>(true);
 
   const [hoverInfo, setHoverInfo] = useState<{
     x: number;
@@ -88,7 +108,15 @@ export default function DeckH3Map({
     });
   }, [extruded3D]);
 
-  // Precompute [lng, lat] polygon boundaries from h3.cellToBoundary(h, true)
+  // Lookup map from h3_index -> cell risk/speed for dynamic road & intersection coloring
+  const cellLookup = useMemo(() => {
+    const map = new Map<string, H3CellRecord>();
+    for (const c of cells) {
+      map.set(c.h3_index, c);
+    }
+    return map;
+  }, [cells]);
+
   const cellsWithBoundaries = useMemo(() => {
     return cells.map((cell) => {
       let polygon: [number, number][] = [];
@@ -104,20 +132,21 @@ export default function DeckH3Map({
     });
   }, [cells]);
 
-  // Show text labels for visible cells (all cells when zoomed in >= 12.3, or top/elevated risk cells when zoomed out)
   const labelCells = useMemo(() => {
     if (!showRiskLabels) return [];
-    if (viewState.zoom >= 12.3) {
+    if (viewState.zoom >= 12.3 && cellsWithBoundaries.length <= 380) {
       return cellsWithBoundaries;
     }
     return cellsWithBoundaries.filter(
-      (c, idx) => idx < 35 || c.risk_score >= 0.35 || c.h3_index === selectedCell?.h3_index
+      (c, idx) =>
+        idx < 45 ||
+        c.risk_score >= 0.35 ||
+        c.h3_index === selectedCell?.h3_index
     );
   }, [cellsWithBoundaries, showRiskLabels, viewState.zoom, selectedCell]);
 
   const layers = useMemo(() => {
     const activeLayers: unknown[] = [
-      // Primary H3 Hexagon Layer + PolygonLayer guarantee crisp rendering across all GPU/WebGL setups
       new H3HexagonLayer<H3CellRecord>({
         id: 'budapest-h3-risk-layer',
         data: cells,
@@ -131,7 +160,7 @@ export default function DeckH3Map({
         getLineColor: (d) =>
           selectedCell?.h3_index === d.h3_index
             ? [255, 255, 255, 255]
-            : [15, 23, 42, 190],
+            : [15, 23, 42, 180],
         lineWidthMinPixels: 1.5,
         getElevation: (d) => (extruded3D ? Math.max(25, d.risk_score * 850) : 0),
         elevationScale: 1,
@@ -178,7 +207,7 @@ export default function DeckH3Map({
         getLineColor: (d) =>
           selectedCell?.h3_index === d.h3_index
             ? [255, 255, 255, 255]
-            : [15, 23, 42, 200],
+            : [15, 23, 42, 195],
         lineWidthMinPixels: 1.5,
         getElevation: (d) => (extruded3D ? Math.max(25, d.risk_score * 850) : 0),
         elevationScale: 1,
@@ -213,6 +242,89 @@ export default function DeckH3Map({
       }),
     ];
 
+    // 1. OSM Road Network LineStrings colored by BKK speed / H3 risk
+    if (showRoadNetwork && infrastructure?.roads?.length) {
+      activeLayers.push(
+        new PathLayer<OsmRoadLine>({
+          id: 'budapest-osm-roads-layer',
+          data: infrastructure.roads,
+          pickable: false,
+          widthScale: 1,
+          widthMinPixels: 3,
+          widthMaxPixels: 7,
+          jointRounded: true,
+          capRounded: true,
+          getPath: (d) => d.path,
+          getWidth: (d) => (d.highway === 'trunk' ? 5 : 3.5),
+          getColor: (d) => {
+            const cell = cellLookup.get(d.h3_index);
+            const risk = cell?.risk_score ?? 0.25;
+            if (risk >= 0.65) return [248, 113, 113, 235]; // Red congested/high-risk road
+            if (risk >= 0.45) return [251, 146, 60, 230]; // Orange road
+            return [56, 189, 248, 215]; // Cyan-blue free-flowing arterial
+          },
+          updateTriggers: {
+            getColor: [cells],
+          },
+        })
+      );
+    }
+
+    // 2. OSM Tram Tracks (`railway=tram`) highlighted in bright gold/cyan
+    if (showTramNetwork && infrastructure?.trams?.length) {
+      activeLayers.push(
+        new PathLayer<OsmTramLine>({
+          id: 'budapest-osm-trams-layer',
+          data: infrastructure.trams,
+          pickable: false,
+          widthScale: 1,
+          widthMinPixels: 2.5,
+          widthMaxPixels: 5,
+          jointRounded: true,
+          capRounded: true,
+          getPath: (d) => d.path,
+          getWidth: 3,
+          getColor: [250, 204, 21, 245], // Tram yellow
+        })
+      );
+    }
+
+    // 3. OSM Intersections & Traffic Signals (`ScatterplotLayer`)
+    if (showIntersections && infrastructure?.intersections?.length) {
+      activeLayers.push(
+        new ScatterplotLayer<OsmIntersectionNode>({
+          id: 'budapest-osm-intersections-layer',
+          data: infrastructure.intersections,
+          pickable: false,
+          filled: true,
+          stroked: true,
+          radiusMinPixels: 4.5,
+          radiusMaxPixels: 9,
+          lineWidthMinPixels: 1.5,
+          getPosition: (d) => [
+            d.lng,
+            d.lat,
+            extruded3D
+              ? Math.max(30, (cellLookup.get(d.h3_index)?.risk_score ?? 0.2) * 850 + 12)
+              : 4,
+          ],
+          getRadius: 35,
+          getFillColor: (d) => {
+            const risk = cellLookup.get(d.h3_index)?.risk_score ?? 0.3;
+            return risk >= 0.55
+              ? [239, 68, 68, 255]
+              : [255, 255, 255, 240];
+          },
+          getLineColor: [14, 165, 233, 255],
+          updateTriggers: {
+            getPosition: [extruded3D, cells],
+            getFillColor: [cells],
+          },
+        })
+      );
+    }
+
+    // 4. Risk Percentage Value Labels on Hexagons (`TextLayer`)
     if (showRiskLabels && labelCells.length > 0) {
       activeLayers.push(
         new TextLayer<(typeof cellsWithBoundaries)[number]>({
@@ -222,26 +334,27 @@ export default function DeckH3Map({
           getPosition: (d) => [
             d.center_lng,
             d.center_lat,
-            extruded3D ? Math.max(25, d.risk_score * 850) + 18 : 5,
+            extruded3D ? Math.max(25, d.risk_score * 850) + 22 : 8,
           ],
           getText: (d) => `${Math.round(d.risk_score * 100)}%`,
           getSize: (d) =>
             selectedCell?.h3_index === d.h3_index || d.risk_score >= 0.45 ? 13 : 11,
           getColor: [255, 255, 255, 245],
           fontWeight: 'bold',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          fontFamily:
+            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
           getTextAnchor: 'middle',
           getAlignmentBaseline: 'center',
           billboard: true,
           background: true,
           getBackgroundColor: (d) =>
             d.risk_score >= 0.65
-              ? [127, 29, 29, 215]
+              ? [127, 29, 29, 220]
               : d.risk_score >= 0.45
-              ? [124, 45, 18, 215]
+              ? [124, 45, 18, 220]
               : d.risk_score >= 0.25
-              ? [113, 63, 18, 205]
-              : [6, 78, 59, 195],
+              ? [113, 63, 18, 210]
+              : [6, 78, 59, 200],
           backgroundPadding: [4, 2],
           updateTriggers: {
             getPosition: [extruded3D, labelCells],
@@ -257,84 +370,139 @@ export default function DeckH3Map({
   }, [
     cells,
     cellsWithBoundaries,
+    cellLookup,
+    infrastructure,
     labelCells,
     extruded3D,
     selectedCell,
     showRiskLabels,
+    showRoadNetwork,
+    showTramNetwork,
+    showIntersections,
     onSelectCell,
   ]);
 
   return (
     <div className="relative w-full h-full bg-[#090d16] overflow-hidden select-none">
-      <Map
+      <MapComponent
         {...viewState}
-        onMove={(evt: { viewState: typeof viewState }) => setViewState(evt.viewState)}
+        onMove={(evt: { viewState: typeof viewState }) =>
+          setViewState(evt.viewState)
+        }
         mapStyle={CARTO_DARK_MATTER}
         style={{ width: '100%', height: '100%' }}
       >
         <DeckGLOverlay layers={layers} />
         <NavigationControl position="bottom-right" />
-      </Map>
+      </MapComponent>
 
-      {/* Top-Left Floating Controls (2D / 3D Extrusion Toggle, Value Labels & Reset) */}
-      <div className="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-2">
+      {/* Top-Left Floating Layer & View Controls */}
+      <div className="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-2 max-w-[92%]">
         <button
           onClick={handleToggleExtrusion}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
             extruded3D
               ? 'bg-indigo-600/90 border-indigo-400 text-white'
               : 'bg-slate-900/90 border-slate-700 text-slate-200 hover:bg-slate-800'
           }`}
         >
           {extruded3D ? <Box className="w-4 h-4" /> : <Layers className="w-4 h-4" />}
-          <span>{extruded3D ? '3D Extrudált H3 Nézet' : '2D Sík H3 Nézet'}</span>
+          <span>{extruded3D ? '3D Extrudált' : '2D Sík'}</span>
         </button>
 
         <button
           onClick={() => setShowRiskLabels((prev) => !prev)}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
+          className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
             showRiskLabels
               ? 'bg-emerald-600/90 border-emerald-400 text-white'
               : 'bg-slate-900/90 border-slate-700 text-slate-300 hover:bg-slate-800'
           }`}
-          title="Kockázati % értékek megjelenítése a hexagonokon"
         >
           <Hash className="w-3.5 h-3.5" />
-          <span>Kockázati % Értékek</span>
+          <span>% Értékek</span>
+        </button>
+
+        <button
+          onClick={() => setShowRoadNetwork((prev) => !prev)}
+          className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
+            showRoadNetwork
+              ? 'bg-sky-600/90 border-sky-400 text-white'
+              : 'bg-slate-900/90 border-slate-700 text-slate-300 hover:bg-slate-800'
+          }`}
+          title="OSM főúthálózat színezése kockázat és BKK sebesség szerint"
+        >
+          <Route className="w-3.5 h-3.5" />
+          <span>Főutak ({infrastructure?.roads?.length ?? 0})</span>
+        </button>
+
+        <button
+          onClick={() => setShowTramNetwork((prev) => !prev)}
+          className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
+            showTramNetwork
+              ? 'bg-amber-500/90 border-amber-300 text-slate-950'
+              : 'bg-slate-900/90 border-slate-700 text-slate-300 hover:bg-slate-800'
+          }`}
+          title="OSM villamossínek (railway=tram)"
+        >
+          <TrainTrack className="w-3.5 h-3.5" />
+          <span>Villamossínek ({infrastructure?.trams?.length ?? 0})</span>
+        </button>
+
+        <button
+          onClick={() => setShowIntersections((prev) => !prev)}
+          className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-semibold border backdrop-blur-md transition-all shadow-lg ${
+            showIntersections
+              ? 'bg-cyan-600/90 border-cyan-400 text-white'
+              : 'bg-slate-900/90 border-slate-700 text-slate-300 hover:bg-slate-800'
+          }`}
+          title="OSM jelzőlámpás csomópontok (highway=traffic_signals)"
+        >
+          <GitFork className="w-3.5 h-3.5" />
+          <span>Csomópontok ({infrastructure?.intersections?.length ?? 0})</span>
         </button>
 
         <button
           onClick={resetCamera}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-900/90 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 backdrop-blur-md shadow-lg transition"
+          className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium bg-slate-900/90 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 backdrop-blur-md shadow-lg transition"
           title="Budapest középpont visszaállítása"
         >
           <Compass className="w-4 h-4 text-sky-400" />
-          <span>Budapest Centrum</span>
+          <span>Centrum</span>
         </button>
       </div>
 
-      {/* Bottom-Left Risk Legend */}
-      <div className="absolute bottom-5 left-4 z-10 bg-slate-900/90 border border-slate-800 backdrop-blur-md rounded-xl p-3 shadow-xl text-xs">
-        <div className="font-semibold text-slate-300 mb-2 flex items-center justify-between gap-4">
-          <span>Baleseti Kockázat (Uber H3 Res-8)</span>
-          <span className="text-[10px] font-mono text-slate-400">{cells.length} hex</span>
+      {/* Bottom-Left Risk & Infrastructure Legend */}
+      <div className="absolute bottom-5 left-4 z-10 bg-slate-900/90 border border-slate-800 backdrop-blur-md rounded-xl p-3 shadow-xl text-xs space-y-2">
+        <div className="font-semibold text-slate-300 flex items-center justify-between gap-4">
+          <span>Baleseti Kockázat &amp; OSM Infrastruktúra</span>
+          <span className="text-[10px] font-mono text-slate-400">
+            {cells.length} H3 Res-8 hex
+          </span>
         </div>
         <div className="grid grid-cols-2 sm:flex items-center gap-3">
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-sm bg-emerald-500 inline-block" />
-            <span className="text-slate-300">&lt; 25% Alacsony</span>
+            <span className="text-slate-300">&lt; 25%</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-sm bg-yellow-500 inline-block" />
-            <span className="text-slate-300">25–45% Mérsékelt</span>
+            <span className="text-slate-300">25–45%</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-sm bg-orange-500 inline-block" />
-            <span className="text-slate-300">45–65% Magas</span>
+            <span className="text-slate-300">45–65%</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-sm bg-red-500 inline-block" />
-            <span className="text-slate-300">&ge; 65% Kritikus</span>
+            <span className="text-slate-300">&ge; 65%</span>
+          </div>
+          <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2">
+            <span className="w-3 h-1 bg-yellow-400 inline-block rounded" />
+            <span className="text-amber-300">Villamos</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-white border border-sky-400 inline-block" />
+            <span className="text-cyan-300">Csomópont</span>
           </div>
         </div>
       </div>
@@ -346,7 +514,9 @@ export default function DeckH3Map({
           style={{
             left: Math.min(
               hoverInfo.x + 14,
-              typeof window !== 'undefined' ? window.innerWidth - 300 : hoverInfo.x + 14
+              typeof window !== 'undefined'
+                ? window.innerWidth - 300
+                : hoverInfo.x + 14
             ),
             top: Math.max(hoverInfo.y - 20, 12),
           }}
@@ -391,6 +561,13 @@ export default function DeckH3Map({
             <div className="flex justify-between">
               <span className="text-slate-400">Sebesség szórás (Shockwave):</span>
               <span className="font-mono">±{hoverInfo.object.bkk_speed_std} km/h</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">OSM Csomópont / Villamos:</span>
+              <span className="font-mono">
+                {hoverInfo.object.osm_intersection_count} db /{' '}
+                {hoverInfo.object.osm_tram_tracks ? 'Igen' : 'Nem'}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Historikus balesetek:</span>
