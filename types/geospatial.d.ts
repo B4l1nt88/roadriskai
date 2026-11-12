@@ -50,3 +50,4 @@ declare module '@deck.gl/geo-layers' {
     constructor(props: H3HexagonLayerProps<DataT>);
   }
 }
+

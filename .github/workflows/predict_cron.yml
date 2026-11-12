@@ -1,0 +1,21 @@
+name: Budapest H3 15-Minute Risk Prediction Cron
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger-prediction:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger /api/cron/predict endpoint
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'http://localhost:3000' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET || '' }}
+        run: |
+          echo "Triggering 15-minute Budapest H3 prediction cycle at ${APP_URL}/api/cron/predict..."
+          curl -sS -X POST "${APP_URL}/api/cron/predict" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" || true
+

@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
+import { invalidateOnnxSessionCache } from '@/lib/onnx-inference';
+
+export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
@@ -48,17 +51,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Force ONNX singleton session reload on next prediction run
+    invalidateOnnxSessionCache();
+
     return NextResponse.json({
       ok: true,
       filename: file.name,
       size_bytes: buffer.length,
       saved_local: savedLocal,
       saved_supabase: savedSupabase,
-      message: `ONNX modell sikeresen feltöltve (${(buffer.length / 1024).toFixed(1)} KB).`,
+      message: `ONNX modell sikeresen feltöltve és aktiválva (${(buffer.length / 1024).toFixed(1)} KB).`,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
-
