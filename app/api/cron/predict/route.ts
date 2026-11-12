@@ -14,6 +14,7 @@ import {
 } from '@/lib/feature-engineering';
 import { runRiskInferenceBatch } from '@/lib/onnx-inference';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
+import { fetchTomTomBudapestIncidents } from '@/lib/live-incidents';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -134,6 +135,35 @@ async function executePredictionCycle() {
   // 1. Decode BKK GTFS-RT VehiclePositions.pb or fall back to realistic spatio-temporal telemetry
   const { cellTelemetry, liveFeedUsed } = await fetchLiveBkkGtfsRtTelemetry();
 
+  // 1B. If TOMTOM_API_KEY is configured, also pull live TomTom Traffic Incidents v5 and increment cell accidents
+  let tomtomIncidentsCount = 0;
+  if (process.env.TOMTOM_API_KEY || process.env.NEXT_PUBLIC_TOMTOM_API_KEY) {
+    try {
+      const ttReport = await fetchTomTomBudapestIncidents();
+      if (ttReport.rows.length > 0) {
+        tomtomIncidentsCount = ttReport.rows.length;
+        const cellByIdx = new Map(cells.map((c) => [c.h3_index, c]));
+        for (const r of ttReport.rows) {
+          const idx = h3.latLngToCell(r.lat, r.lng, 8);
+          const targetCell = cellByIdx.get(idx);
+          if (targetCell) {
+            targetCell.total_accidents += 1;
+            if (r.is_wet_road) targetCell.wet_accidents += 1;
+          }
+        }
+        const maxAcc = Math.max(1, ...cells.map((c) => c.total_accidents));
+        for (const c of cells) {
+          c.hist_accident_density = Number((c.total_accidents / maxAcc).toFixed(4));
+          c.hist_wet_accident_ratio = Number(
+            (c.wet_accidents / Math.max(1, c.total_accidents)).toFixed(4)
+          );
+        }
+      }
+    } catch {
+      // Ignore TomTom transient error during cron
+    }
+  }
+
   const hour = now.getHours();
   const isRushHour = (hour >= 7 && hour <= 9) || (hour >= 16 && hour <= 18);
   const rainSlowdown = weather.precip_mm > 0.5 ? 0.85 : 1.0;
@@ -213,7 +243,13 @@ async function executePredictionCycle() {
     wind_kmh: weather.wind_speed_kmh,
     active_bkk_vehicles: totalVehicles,
     execution_ms: executionMs,
-    model_source: liveFeedUsed ? `${modelSource} + BKK-GTFS-RT` : modelSource,
+    model_source: [
+      modelSource,
+      liveFeedUsed ? 'BKK-GTFS-RT' : null,
+      tomtomIncidentsCount > 0 ? `TomTom(${tomtomIncidentsCount})` : null,
+    ]
+      .filter(Boolean)
+      .join(' + '),
   };
 
   local.cells = cells;

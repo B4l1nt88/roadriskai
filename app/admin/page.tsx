@@ -17,6 +17,9 @@ import {
   AlertCircle,
   Clock,
   Activity,
+  Radio,
+  KeyRound,
+  ShieldAlert,
 } from 'lucide-react';
 
 const SAMPLE_BUDAPEST_ACCIDENTS_CSV = `lat,lng,occurred_at,is_wet_road,severity,osm_tram_tracks,osm_intersection_count,label
@@ -53,6 +56,11 @@ export default function AdminPortalPage() {
   const [isResettingGrid, setIsResettingGrid] = useState(false);
   const [isRunningCron, setIsRunningCron] = useState(false);
   const [isUploadingModel, setIsUploadingModel] = useState(false);
+  const [isSyncingIncidents, setIsSyncingIncidents] = useState(false);
+  const [tomtomApiKeyInput, setTomtomApiKeyInput] = useState('');
+  const [syncReports, setSyncReports] = useState<
+    Array<{ source: string; fetched_count: number; details: string[] }>
+  >([]);
   const [recentlyUpdatedH3, setRecentlyUpdatedH3] = useState<Set<string>>(new Set());
 
   const loadDashboardData = useCallback(async () => {
@@ -100,7 +108,10 @@ export default function AdminPortalPage() {
         });
         await loadDashboardData();
       } else {
-        setStatusMessage({ type: 'error', text: data.error || 'Hiba a rács alaphelyzetbe állításakor.' });
+        setStatusMessage({
+          type: 'error',
+          text: data.error || 'Hiba a rács alaphelyzetbe állításakor.',
+        });
       }
     } catch (err: unknown) {
       setStatusMessage({
@@ -155,6 +166,50 @@ export default function AdminPortalPage() {
     const file = e.dataTransfer.files?.[0];
     if (file) {
       await uploadCsvFile(file);
+    }
+  };
+
+  const handleSyncLiveIncidents = async (
+    provider: 'all' | 'tomtom' | 'bkk' | 'historical'
+  ) => {
+    setIsSyncingIncidents(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch('/api/admin/sync-incidents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider,
+          tomtomApiKey: tomtomApiKeyInput.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (Array.isArray(data.reports)) {
+        setSyncReports(data.reports);
+      }
+      if (data.ok) {
+        const touched = new Set<string>(
+          (data.updated_cells || []).map((c: H3CellRecord) => c.h3_index)
+        );
+        setRecentlyUpdatedH3(touched);
+        setStatusMessage({
+          type: 'success',
+          text: data.message,
+        });
+        await loadDashboardData();
+      } else {
+        setStatusMessage({
+          type: 'error',
+          text: data.error || 'Baleseti adatszinkronizáció sikertelen.',
+        });
+      }
+    } catch (err: unknown) {
+      setStatusMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Hálózati hiba.',
+      });
+    } finally {
+      setIsSyncingIncidents(false);
     }
   };
 
@@ -229,7 +284,7 @@ export default function AdminPortalPage() {
               Budapest H3 Spatio-Temporal Admin &amp; MLOps Portál
             </h1>
             <p className="text-xs text-slate-400 mt-1">
-              CSV baleseti koordináták H3 Res-8 indexelése • 14-feature LightGBM tanító adathalmaz export • ONNX modell frissítés • 15 perces cron vezérlés
+              TomTom Traffic Incidents v5 + BKK FUTÁR GTFS-RT baleseti szinkron • CSV H3 Res-8 indexelés • LightGBM ONNX MLOps
             </p>
           </div>
 
@@ -243,7 +298,7 @@ export default function AdminPortalPage() {
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition disabled:opacity-50"
             >
               <RotateCcw className={`w-4 h-4 ${isResettingGrid ? 'animate-spin' : ''}`} />
-              <span>Budapest H3 Rács Reset (~180 hex)</span>
+              <span>Budapest H3 Rács Reset</span>
             </button>
           </div>
         </div>
@@ -265,6 +320,101 @@ export default function AdminPortalPage() {
             <span>{statusMessage.text}</span>
           </div>
         )}
+
+        {/* Featured Panel: Live TomTom Traffic Incidents v5 + BKK FUTÁR Alerts + Budapest Blackspots */}
+        <div className="bg-gradient-to-br from-slate-900 via-slate-900/95 to-indigo-950/30 border border-indigo-500/30 rounded-2xl p-6 space-y-4 shadow-xl">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Radio className="w-5 h-5 text-red-400 animate-pulse" />
+                <h2 className="text-base font-bold text-white">
+                  Élő Baleseti és Forgalmi Incidens Letöltő (TomTom API v5 + BKK FUTÁR GTFS-RT + ORFK/KSH Gócpontok)
+                </h2>
+              </div>
+              <p className="text-xs text-slate-300 mt-1">
+                Közvetlen adatbetöltés Budapest területére (<code className="text-sky-400">bbox: 18.92,47.38,19.25,47.61</code>). Minden letöltött baleset és torlódás automatikusan Uber H3 Resolution-8 hexagonokba kerül és újraszámolja az ONNX kockázatot.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <div className="relative flex-1 md:w-72">
+                <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  value={tomtomApiKeyInput}
+                  onChange={(e) => setTomtomApiKeyInput(e.target.value)}
+                  placeholder="TomTom API Key (vagy TOMTOM_API_KEY .env)"
+                  className="w-full pl-8 pr-3 py-2 rounded-xl bg-slate-950/90 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-400 font-mono"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+            <button
+              onClick={() => handleSyncLiveIncidents('all')}
+              disabled={isSyncingIncidents}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition disabled:opacity-50"
+            >
+              <Radio className="w-4 h-4" />
+              <span>
+                {isSyncingIncidents
+                  ? 'Szinkronizálás...'
+                  : 'Összes Forrás Szinkronizálása (Ajánlott)'}
+              </span>
+            </button>
+
+            <button
+              onClick={() => handleSyncLiveIncidents('bkk')}
+              disabled={isSyncingIncidents}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-semibold bg-sky-600/90 hover:bg-sky-500 text-white transition disabled:opacity-50"
+            >
+              <Activity className="w-4 h-4" />
+              <span>BKK FUTÁR Alerts.pb + Torlódások</span>
+            </button>
+
+            <button
+              onClick={() => handleSyncLiveIncidents('tomtom')}
+              disabled={isSyncingIncidents}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-semibold bg-emerald-600/90 hover:bg-emerald-500 text-white transition disabled:opacity-50"
+            >
+              <ShieldAlert className="w-4 h-4" />
+              <span>TomTom Traffic Incidents v5 Letöltés</span>
+            </button>
+
+            <button
+              onClick={() => handleSyncLiveIncidents('historical')}
+              disabled={isSyncingIncidents}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition disabled:opacity-50"
+            >
+              <Database className="w-4 h-4 text-amber-400" />
+              <span>Budapest 12 Baleseti Gócpont (~115 db)</span>
+            </button>
+          </div>
+
+          {syncReports.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+              {syncReports.map((rep, idx) => (
+                <div
+                  key={idx}
+                  className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs space-y-1"
+                >
+                  <div className="flex items-center justify-between font-semibold text-slate-200">
+                    <span className="truncate">{rep.source}</span>
+                    <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">
+                      +{rep.fetched_count} rekord
+                    </span>
+                  </div>
+                  {rep.details.slice(0, 3).map((d, i) => (
+                    <p key={i} className="text-[11px] text-slate-400 truncate">
+                      • {d}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* 3-Column Action Cards */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -482,7 +632,7 @@ export default function AdminPortalPage() {
             </h3>
             {recentlyUpdatedH3.size > 0 && (
               <span className="text-xs text-emerald-400 font-medium">
-                {recentlyUpdatedH3.size} cella frissítve az utolsó CSV feltöltésből
+                {recentlyUpdatedH3.size} cella frissítve az utolsó szinkronból / CSV-ből
               </span>
             )}
           </div>
@@ -561,4 +711,3 @@ export default function AdminPortalPage() {
     </div>
   );
 }
-
