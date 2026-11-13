@@ -62,12 +62,12 @@ export function riskToRgba(
 }
 
 const HEATMAP_COLOR_RANGE: [number, number, number, number][] = [
-  [16, 185, 129, 40],   // Soft Emerald
-  [52, 211, 153, 110],  // Teal-Green
-  [250, 204, 21, 165],  // Warm Yellow
-  [251, 146, 60, 210],  // Vibrant Orange
-  [239, 68, 68, 240],   // High-Risk Red
-  [185, 28, 28, 255],   // Deep Crimson Core
+  [16, 185, 129, 25],   // Ultra-soft Emerald outer halo
+  [52, 211, 153, 85],   // Smooth Teal-Green transition
+  [250, 204, 21, 140],  // Warm Amber-Yellow blend
+  [251, 146, 60, 185],  // Soft Vibrant Orange
+  [239, 68, 68, 220],   // Blended High-Risk Red
+  [185, 28, 28, 245],   // Deep Crimson Hotspot Core
 ];
 
 interface DeckH3MapProps {
@@ -91,7 +91,7 @@ export default function DeckH3Map({
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
   const [showHexagons, setShowHexagons] = useState<boolean>(false);
   const [hexOpacity, setHexOpacity] = useState<number>(0.38);
-  const [heatmapRadius, setHeatmapRadius] = useState<number>(62);
+  const [heatmapRadius, setHeatmapRadius] = useState<number>(115);
 
   const [viewState, setViewState] = useState({
     longitude: 19.054,
@@ -167,6 +167,27 @@ export default function DeckH3Map({
     });
   }, [cells]);
 
+  // Sub-sample 7 points per H3 hexagon (center + 6 vertices) so adjacent cells blend seamlessly into a single organic heatmap cloud
+  const smoothedHeatmapPoints = useMemo(() => {
+    const pts: Array<{ position: [number, number]; weight: number }> = [];
+    for (const cell of cellsWithBoundaries) {
+      const baseWeight = Math.pow(Math.max(0.06, cell.risk_score), 1.15);
+      // Center point carries main weight
+      pts.push({
+        position: [cell.center_lng, cell.center_lat],
+        weight: baseWeight * 1.4,
+      });
+      // 6 boundary vertices carry halo weight to bridge gaps between neighboring H3 cells
+      for (const [lng, lat] of cell.polygon) {
+        pts.push({
+          position: [lng, lat],
+          weight: baseWeight * 0.55,
+        });
+      }
+    }
+    return pts;
+  }, [cellsWithBoundaries]);
+
   const labelCells = useMemo(() => {
     if (!showRiskLabels) return [];
     if (viewState.zoom >= 12.6 && cellsWithBoundaries.length <= 380) {
@@ -183,22 +204,23 @@ export default function DeckH3Map({
   const layers = useMemo(() => {
     const activeLayers: unknown[] = [];
 
-    // 1. Smooth Continuous Risk Heatmap Layer (Primary visual mode)
-    if (showHeatmap && cells.length > 0) {
+    // 1. Smooth Continuous Risk Heatmap Layer (Primary visual mode, multi-point blended)
+    if (showHeatmap && smoothedHeatmapPoints.length > 0) {
       activeLayers.push(
-        new HeatmapLayer<H3CellRecord>({
+        new HeatmapLayer<(typeof smoothedHeatmapPoints)[number]>({
           id: 'budapest-risk-heatmap-layer',
-          data: cells,
+          data: smoothedHeatmapPoints,
           pickable: false,
-          getPosition: (d) => [d.center_lng, d.center_lat],
-          getWeight: (d) => Math.pow(Math.max(0.05, d.risk_score), 1.35) * 10,
+          getPosition: (d) => d.position,
+          getWeight: (d) => d.weight,
           radiusPixels: heatmapRadius,
-          intensity: 1.35,
-          threshold: 0.03,
+          intensity: 0.9,
+          threshold: 0.01,
           colorRange: HEATMAP_COLOR_RANGE,
           aggregation: 'SUM',
+          weightsTextureSize: 512,
           updateTriggers: {
-            getWeight: [cells],
+            getWeight: [smoothedHeatmapPoints],
           },
         })
       );
@@ -460,6 +482,7 @@ export default function DeckH3Map({
   }, [
     cells,
     cellsWithBoundaries,
+    smoothedHeatmapPoints,
     cellLookup,
     infrastructure,
     labelCells,
@@ -598,15 +621,15 @@ export default function DeckH3Map({
         <div className="flex flex-wrap items-center gap-4 bg-slate-900/85 border border-slate-800/90 backdrop-blur-md px-3.5 py-2 rounded-xl text-[11px] text-slate-300 shadow-lg w-fit">
           {showHeatmap && (
             <div className="flex items-center gap-2">
-              <span className="text-rose-300 font-medium">Heatmap sugár:</span>
+              <span className="text-rose-300 font-medium">Heatmap összemosás:</span>
               <input
                 type="range"
-                min={30}
-                max={100}
+                min={50}
+                max={180}
                 step={5}
                 value={heatmapRadius}
                 onChange={(e) => setHeatmapRadius(parseInt(e.target.value, 10))}
-                className="w-20 accent-rose-500 cursor-pointer h-1 bg-slate-700 rounded-lg"
+                className="w-24 accent-rose-500 cursor-pointer h-1 bg-slate-700 rounded-lg"
               />
               <span className="font-mono text-slate-400">{heatmapRadius}px</span>
             </div>
