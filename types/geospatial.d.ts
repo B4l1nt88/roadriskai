@@ -125,6 +125,7 @@ declare module '@deck.gl/geo-layers' {
     wireframe?: boolean;
     filled?: boolean;
     extruded?: boolean;
+    coverage?: number;
     getHexagon?: (d: DataT) => string;
     getFillColor?: (d: DataT) => [number, number, number, number] | [number, number, number];
     getLineColor?: (d: DataT) => [number, number, number, number] | [number, number, number];
@@ -138,6 +139,28 @@ declare module '@deck.gl/geo-layers' {
 
   export class H3HexagonLayer<DataT = any> {
     constructor(props: H3HexagonLayerProps<DataT>);
+  }
+}
+
+declare module '@deck.gl/aggregation-layers' {
+  export interface HeatmapLayerProps<DataT = any> {
+    id: string;
+    data: DataT[];
+    pickable?: boolean;
+    getPosition?: (d: DataT) => [number, number];
+    getWeight?: number | ((d: DataT) => number);
+    radiusPixels?: number;
+    intensity?: number;
+    threshold?: number;
+    colorRange?: [number, number, number, number?][];
+    aggregation?: 'SUM' | 'MEAN';
+    weightsTextureSize?: number;
+    debounceTimeout?: number;
+    updateTriggers?: Record<string, any>;
+  }
+
+  export class HeatmapLayer<DataT = any> {
+    constructor(props: HeatmapLayerProps<DataT>);
   }
 }
 
