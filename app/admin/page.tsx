@@ -315,10 +315,10 @@ export default function AdminPortalPage() {
               className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-400 hover:text-sky-300 mb-2"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Vissza az Interaktív Budapest H3 Térképhez</span>
+              <span>Vissza a RoadRiskAI Interaktív Térképhez</span>
             </Link>
             <h1 className="text-2xl font-bold text-white tracking-tight">
-              Budapest H3 Spatio-Temporal Admin &amp; MLOps Portál
+              Road<span className="text-indigo-400">Risk</span>AI — Admin &amp; MLOps Portál
             </h1>
             <p className="text-xs text-slate-400 mt-1">
               TomTom Traffic Incidents v5 + BKK FUTÁR GTFS-RT baleseti szinkron • CSV H3 Res-8 indexelés • LightGBM ONNX MLOps
