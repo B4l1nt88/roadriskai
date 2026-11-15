@@ -128,8 +128,7 @@ export async function fetchTomTomBudapestIncidents(
 ): Promise<IncidentFetchReport> {
   const apiKey =
     explicitApiKey ||
-    process.env.TOMTOM_API_KEY ||
-    process.env.NEXT_PUBLIC_TOMTOM_API_KEY;
+    process.env.TOMTOM_API_KEY;
 
   if (!apiKey) {
     return {
@@ -249,7 +248,7 @@ export async function fetchTomTomBudapestIncidents(
  * using the configured `BKK_API_KEY`, matching accident/disruption alerts to Budapest H3 hubs.
  */
 export async function fetchBkkGtfsRtAccidentAlerts(): Promise<IncidentFetchReport> {
-  const bkkKey = process.env.BKK_API_KEY || process.env.NEXT_PUBLIC_BKK_API_KEY;
+  const bkkKey = process.env.BKK_API_KEY;
   if (!bkkKey) {
     return {
       source: 'bkk-missing-key',
@@ -434,3 +433,4 @@ export async function generateBudapestHistoricalBlackspotDataset(): Promise<Inci
     ],
   };
 }
+

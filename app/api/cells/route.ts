@@ -16,10 +16,7 @@ export async function GET() {
     // Auto-sync live TomTom v5 & BKK GTFS-RT incidents once every 10 minutes when API keys are present in .env.local
     const nowMs = Date.now();
     const hasLiveKeys = Boolean(
-      process.env.TOMTOM_API_KEY ||
-        process.env.NEXT_PUBLIC_TOMTOM_API_KEY ||
-        process.env.BKK_API_KEY ||
-        process.env.NEXT_PUBLIC_BKK_API_KEY
+      process.env.TOMTOM_API_KEY || process.env.BKK_API_KEY
     );
 
     if (hasLiveKeys && nowMs - lastAutoSyncTime > 10 * 60 * 1000) {

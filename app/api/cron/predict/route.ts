@@ -32,7 +32,7 @@ async function fetchLiveBkkGtfsRtTelemetry(): Promise<{
   cellTelemetry: Map<string, BkkCellTelemetry>;
   liveFeedUsed: boolean;
 }> {
-  const bkkApiKey = process.env.BKK_API_KEY || process.env.NEXT_PUBLIC_BKK_API_KEY;
+  const bkkApiKey = process.env.BKK_API_KEY;
   const cellTelemetry = new Map<string, BkkCellTelemetry>();
 
   if (!bkkApiKey) {
@@ -140,10 +140,28 @@ function computeMeanAndStd(
   };
 }
 
-async function executePredictionCycle() {
+let lastCronExecutionTime = 0;
+
+async function executePredictionCycle(forceRun = false) {
   const startTime = Date.now();
-  const weather = await fetchBudapestWeather();
   const local = readLocalStore();
+
+  // Rate-limit external API & ONNX inference calls to at most once every 60 seconds unless forced by Admin/Cron
+  if (!forceRun && startTime - lastCronExecutionTime < 60 * 1000 && local.prediction_runs.length > 0) {
+    return {
+      ok: true,
+      cached: true,
+      run: local.prediction_runs[0],
+      weather: local.weather,
+      bkk_gtfs_rt_live: true,
+      storage_mode: 'rate-limited-cache',
+      cells_updated: local.cells.length,
+      top_risk_cell: local.cells[0] || null,
+    };
+  }
+  lastCronExecutionTime = startTime;
+
+  const weather = await fetchBudapestWeather();
   const supabase = getSupabaseClient();
   const now = new Date();
 
@@ -165,7 +183,7 @@ async function executePredictionCycle() {
 
   // 1B. If TOMTOM_API_KEY is configured, also pull live TomTom Traffic Incidents v5 and increment cell accidents
   let tomtomIncidentsCount = 0;
-  if (process.env.TOMTOM_API_KEY || process.env.NEXT_PUBLIC_TOMTOM_API_KEY) {
+  if (process.env.TOMTOM_API_KEY) {
     try {
       const ttReport = await fetchTomTomBudapestIncidents();
       if (ttReport.rows.length > 0) {

@@ -47,3 +47,20 @@ CREATE TABLE IF NOT EXISTS prediction_runs (
   model_source TEXT DEFAULT 'onnx-lightgbm'
 );
 
+-- ============================================================================
+-- Row Level Security (RLS) for Public Vercel Deployment
+-- Public visitors (anon) can only SELECT; only server-side service_role can write.
+-- ============================================================================
+ALTER TABLE h3_grid ENABLE ROW LEVEL SECURITY;
+ALTER TABLE raw_accidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE prediction_runs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public read on h3_grid" ON h3_grid;
+CREATE POLICY "Allow public read on h3_grid"
+  ON h3_grid FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS "Allow public read on prediction_runs" ON prediction_runs;
+CREATE POLICY "Allow public read on prediction_runs"
+  ON prediction_runs FOR SELECT
+  USING (true);
