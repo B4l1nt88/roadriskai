@@ -173,10 +173,11 @@ export async function runRiskInferenceBatch(
             const rawP1 = Number(rawData[i * 2 + 1]);
             const vec = buildCellFeatureVector(cells[i], weather, timestamp);
             const calP1 = predictCalibratedRiskFromFeatures(vec);
-            // Blend ONNX probability with calibrated spatial prior so background streets stay green
-            const blended = Number.isFinite(rawP1) ? rawP1 * 0.55 + calP1 * 0.45 : calP1;
+            // Anchor output to calibrated spatial probability (75% calibrated + 25% ONNX tree)
+            // so synthetic LightGBM tree splits never push normal zones above 80%
+            const blended = Number.isFinite(rawP1) ? rawP1 * 0.25 + calP1 * 0.75 : calP1;
             probabilities.push(
-              Number(Math.min(0.95, Math.max(0.02, blended)).toFixed(4))
+              Number(Math.min(0.86, Math.max(0.02, blended)).toFixed(4))
             );
           }
           return { probabilities, modelSource: source };
@@ -185,9 +186,9 @@ export async function runRiskInferenceBatch(
             const rawP1 = Number(rawData[i]);
             const vec = buildCellFeatureVector(cells[i], weather, timestamp);
             const calP1 = predictCalibratedRiskFromFeatures(vec);
-            const blended = Number.isFinite(rawP1) ? rawP1 * 0.55 + calP1 * 0.45 : calP1;
+            const blended = Number.isFinite(rawP1) ? rawP1 * 0.25 + calP1 * 0.75 : calP1;
             probabilities.push(
-              Number(Math.min(0.95, Math.max(0.02, blended)).toFixed(4))
+              Number(Math.min(0.86, Math.max(0.02, blended)).toFixed(4))
             );
           }
           return { probabilities, modelSource: source };

@@ -67,10 +67,30 @@ async function fetchLiveBkkGtfsRtTelemetry(): Promise<{
         continue;
       }
 
+      // Skip parked / terminal / boarding vehicles (STOPPED_AT === 1 or speed === 0)
+      // In BKK GTFS-RT, stopped buses/trams at stops report speed = 0 m/s, which is NOT a traffic jam!
+      const currentStatus = entity.vehicle?.currentStatus;
+      if (currentStatus === 1) {
+        continue;
+      }
+
       const h3Index = h3.latLngToCell(pos.latitude, pos.longitude, 8);
-      // GTFS-RT position.speed is in m/s; convert to km/h
-      const rawSpeedMs = typeof pos.speed === 'number' && pos.speed >= 0 ? pos.speed : 8.5;
-      const speedKmh = Math.min(110.0, Math.max(0.0, rawSpeedMs * 3.6));
+      // GTFS-RT position.speed is in m/s; convert to km/h.
+      // Only include moving vehicles (speed >= 1.2 m/s ≈ 4.3 km/h); if speed is omitted, use normal urban transit speed (10.5 m/s ≈ 38 km/h)
+      const hasValidSpeed = typeof pos.speed === 'number' && pos.speed >= 1.2;
+      if (typeof pos.speed === 'number' && pos.speed < 1.2) {
+        // Vehicle is waiting at a stop or traffic light; count vehicle presence but do not distort road flow speed
+        const existing = cellTelemetry.get(h3Index);
+        if (existing) {
+          existing.vehicleCount += 1;
+        } else {
+          cellTelemetry.set(h3Index, { speedsKmh: [], vehicleCount: 1 });
+        }
+        continue;
+      }
+
+      const rawSpeedMs = hasValidSpeed ? (pos.speed as number) : 10.5;
+      const speedKmh = Math.min(90.0, Math.max(12.0, rawSpeedMs * 3.6));
 
       const existing = cellTelemetry.get(h3Index);
       if (existing) {
@@ -93,22 +113,30 @@ async function fetchLiveBkkGtfsRtTelemetry(): Promise<{
   }
 }
 
-function computeMeanAndStd(values: number[], fallbackMean: number, fallbackStd: number): {
+function computeMeanAndStd(
+  values: number[],
+  fallbackMean: number,
+  fallbackStd: number
+): {
   mean: number;
   std: number;
 } {
   if (values.length === 0) {
     return { mean: fallbackMean, std: fallbackStd };
   }
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const rawMean = values.reduce((a, b) => a + b, 0) / values.length;
+  // Blend live transit speed with road free-flow fallback so bus stop slowdowns don't fake a highway crash
+  const mean = rawMean * 0.65 + fallbackMean * 0.35;
   if (values.length === 1) {
     return { mean: Number(mean.toFixed(1)), std: fallbackStd };
   }
   const variance =
-    values.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) / values.length;
+    values.reduce((acc, v) => acc + (v - rawMean) * (v - rawMean), 0) /
+    values.length;
+  // Cap transit speed std at 12.5 km/h so normal bus vs tram speed differences don't trigger false Shockwaves
   return {
     mean: Number(mean.toFixed(1)),
-    std: Number(Math.min(50.0, Math.max(1.5, Math.sqrt(variance))).toFixed(1)),
+    std: Number(Math.min(12.5, Math.max(2.0, Math.sqrt(variance) * 0.6)).toFixed(1)),
   };
 }
 
