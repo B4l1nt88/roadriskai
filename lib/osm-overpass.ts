@@ -585,3 +585,4 @@ export async function expandToFullBudapestPolygonGrid(): Promise<{
     new_cells_added: newCellsAdded,
   };
 }
+
