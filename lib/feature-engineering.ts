@@ -208,28 +208,30 @@ export function predictCalibratedRiskFromFeatures(features: Float32Array): numbe
     hist_wet_accident_ratio,
   ] = Array.from(features);
 
-  const rushHourBoost = -0.35 * hour_cos + 0.15 * hour_sin - 0.25 * is_weekend;
+  const rushHourBoost = -0.3 * hour_cos + 0.12 * hour_sin - 0.25 * is_weekend;
 
   const congestionTerm =
-    -1.85 * (bkk_speed_ratio - 0.8) +
-    0.085 * bkk_speed_std +
-    -0.95 * (neighbor_speed_ratio - 0.8) +
-    0.0018 * bkk_delay_avg;
+    -1.65 * (bkk_speed_ratio - 0.85) +
+    0.075 * bkk_speed_std +
+    -0.85 * (neighbor_speed_ratio - 0.85) +
+    0.0015 * bkk_delay_avg;
 
   const icingInteraction = temp_c <= 2.0 && precip_mm > 0 ? 0.85 : 0.0;
   const weatherTerm =
-    0.14 * precip_mm + 0.012 * wind_speed_kmh + icingInteraction;
+    0.14 * precip_mm + 0.01 * wind_speed_kmh + icingInteraction;
 
-  const wetInteraction = precip_mm > 0.2 ? 0.65 * hist_wet_accident_ratio : 0.15 * hist_wet_accident_ratio;
+  const wetInteraction = precip_mm > 0.2 ? 0.6 * hist_wet_accident_ratio : 0.12 * hist_wet_accident_ratio;
   const infraHistoryTerm =
-    0.42 * osm_tram_tracks +
-    0.065 * osm_intersection_count +
-    2.45 * hist_accident_density +
+    0.35 * osm_tram_tracks +
+    0.055 * osm_intersection_count +
+    2.35 * hist_accident_density +
     wetInteraction;
 
-  const logit = -2.65 + rushHourBoost + congestionTerm + weatherTerm + infraHistoryTerm;
+  // Lower baseline intercept (-3.45) so quiet residential/outer streets sit in a realistic 6%–18% green range,
+  // while major intersections / shockwaves / wet tram corridors reach 45%–82%.
+  const logit = -3.45 + rushHourBoost + congestionTerm + weatherTerm + infraHistoryTerm;
   const prob = 1.0 / (1.0 + Math.exp(-logit));
 
-  return Number(Math.min(0.99, Math.max(0.01, prob)).toFixed(4));
+  return Number(Math.min(0.95, Math.max(0.02, prob)).toFixed(4));
 }
 

@@ -146,9 +146,9 @@ export function generateBudapestSeedGrid(weather?: WeatherTelemetry): H3CellReco
 
   for (const hub of BUDAPEST_SEED_HUBS) {
     const hubCenterCell = h3.latLngToCell(hub.lat, hub.lng, 8);
-    // gridDisk(hubCell, 4) yields 61 cells per hub; overlapping hubs yield ~200-350 or we cap/keep all contiguous
-    // Note: k=2 gives 19*8 = 152, k=3 gives 37*8 = ~220, k=4 gives ~350. Let's use gridDisk(hubCenterCell, 4) as specified in Section 6!
-    const disk = h3.gridDisk(hubCenterCell, 4);
+    // Use k=5 ring around each of the 8 Budapest seed hubs (~480 contiguous hexagons)
+    // so there is a wide, realistic gradient from high-risk core junctions out to calm residential streets.
+    const disk = h3.gridDisk(hubCenterCell, 5);
 
     for (const h3Index of disk) {
       if (cellMap.has(h3Index)) continue;
@@ -157,42 +157,64 @@ export function generateBudapestSeedGrid(weather?: WeatherTelemetry): H3CellReco
       const dist = h3.gridDistance(hubCenterCell, h3Index);
       const rand = hashH3(h3Index);
 
-      const isCore = dist <= 1;
-      const isInner = dist <= 2;
+      const isCore = dist === 0;
+      const isRing1 = dist === 1;
+      const isRing2 = dist === 2;
 
-      const osm_tram_tracks = isCore ? hub.osm_tram_tracks : rand > 0.55 ? 1 : 0;
+      const osm_tram_tracks = isCore
+        ? hub.osm_tram_tracks
+        : isRing1 && rand > 0.45
+        ? 1
+        : rand > 0.82
+        ? 1
+        : 0;
       const osm_intersection_count = Math.max(
-        2,
-        Math.round(hub.osm_intersection_count - dist * 1.1 + (rand * 4 - 2))
+        1,
+        Math.round(hub.osm_intersection_count - dist * 1.4 + (rand * 3 - 1.5))
       );
       const free_flow_kmh = hub.free_flow_kmh;
 
       const baseAccidents = isCore
-        ? Math.round(14 + rand * 28)
-        : isInner
-        ? Math.round(5 + rand * 16)
-        : Math.round(1 + rand * 8);
+        ? Math.round(22 + rand * 20)
+        : isRing1
+        ? Math.round(9 + rand * 12)
+        : isRing2
+        ? Math.round(3 + rand * 7)
+        : Math.round(rand * 4);
 
       const wet_accidents = Math.min(
         baseAccidents,
-        Math.round(baseAccidents * (0.22 + (osm_tram_tracks ? 0.18 : 0.05) + rand * 0.15))
+        Math.round(
+          baseAccidents * (0.18 + (osm_tram_tracks ? 0.18 : 0.04) + rand * 0.12)
+        )
       );
 
-      const speedFactor = isCore ? 0.42 + rand * 0.35 : 0.62 + rand * 0.32;
+      const speedFactor = isCore
+        ? 0.42 + rand * 0.22
+        : isRing1
+        ? 0.58 + rand * 0.25
+        : 0.78 + rand * 0.2;
       const bkk_avg_speed = Number((free_flow_kmh * speedFactor).toFixed(1));
       const bkk_speed_std = Number(
-        (isCore ? 7.5 + rand * 6.5 : 3.0 + rand * 5.5).toFixed(1)
+        (isCore
+          ? 9.5 + rand * 5.5
+          : isRing1
+          ? 5.5 + rand * 4.5
+          : 2.2 + rand * 3.0
+        ).toFixed(1)
       );
       const bkk_vehicle_count = isCore
-        ? Math.round(8 + rand * 18)
-        : Math.round(2 + rand * 9);
+        ? Math.round(10 + rand * 14)
+        : isRing1
+        ? Math.round(5 + rand * 8)
+        : Math.round(1 + rand * 5);
 
       const label =
         dist === 0
-          ? `${hub.name} (Centrum)`
+          ? `${hub.name} (Főcsomópont)`
           : dist <= 2
           ? `${hub.name} (${dist}. gyűrű)`
-          : `${hub.name} zóna`;
+          : `${hub.name} tágabb zóna`;
 
       cellMap.set(h3Index, {
         h3_index: h3Index,
@@ -249,7 +271,8 @@ export function readLocalStore(): LocalStoreState {
     if (fs.existsSync(LOCAL_STORE_PATH)) {
       const raw = fs.readFileSync(LOCAL_STORE_PATH, 'utf-8');
       const parsed = JSON.parse(raw) as LocalStoreState;
-      if (parsed && Array.isArray(parsed.cells) && parsed.cells.length > 0) {
+      // Only reuse cached local store if it already has the expanded >=420 H3 cells
+      if (parsed && Array.isArray(parsed.cells) && parsed.cells.length >= 420) {
         memoryStore = parsed;
         return parsed;
       }

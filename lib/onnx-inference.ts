@@ -170,17 +170,24 @@ export async function runRiskInferenceBatch(
 
         if (rawData.length === N * 2) {
           for (let i = 0; i < N; i++) {
-            const p1 = Number(rawData[i * 2 + 1]);
+            const rawP1 = Number(rawData[i * 2 + 1]);
+            const vec = buildCellFeatureVector(cells[i], weather, timestamp);
+            const calP1 = predictCalibratedRiskFromFeatures(vec);
+            // Blend ONNX probability with calibrated spatial prior so background streets stay green
+            const blended = Number.isFinite(rawP1) ? rawP1 * 0.55 + calP1 * 0.45 : calP1;
             probabilities.push(
-              Number(Math.min(0.99, Math.max(0.01, Number.isFinite(p1) ? p1 : 0.08)).toFixed(4))
+              Number(Math.min(0.95, Math.max(0.02, blended)).toFixed(4))
             );
           }
           return { probabilities, modelSource: source };
         } else if (rawData.length === N) {
           for (let i = 0; i < N; i++) {
-            const p1 = Number(rawData[i]);
+            const rawP1 = Number(rawData[i]);
+            const vec = buildCellFeatureVector(cells[i], weather, timestamp);
+            const calP1 = predictCalibratedRiskFromFeatures(vec);
+            const blended = Number.isFinite(rawP1) ? rawP1 * 0.55 + calP1 * 0.45 : calP1;
             probabilities.push(
-              Number(Math.min(0.99, Math.max(0.01, Number.isFinite(p1) ? p1 : 0.08)).toFixed(4))
+              Number(Math.min(0.95, Math.max(0.02, blended)).toFixed(4))
             );
           }
           return { probabilities, modelSource: source };

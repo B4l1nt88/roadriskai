@@ -61,13 +61,18 @@ export function riskToRgba(
   return [16, 185, 129, alpha]; // Low Emerald
 }
 
+/**
+ * Realistic, non-alarmist color ramp:
+ * Bottom 65% of the scale stays calm Emerald / Teal / soft Yellow,
+ * Orange appears only for genuinely elevated zones, and Red is reserved strictly for top hotspots.
+ */
 const HEATMAP_COLOR_RANGE: [number, number, number, number][] = [
-  [16, 185, 129, 15],   // Subtle Emerald ambient glow
-  [52, 211, 153, 55],   // Soft Teal transition
-  [250, 204, 21, 95],   // Translucent Amber-Yellow
-  [251, 146, 60, 125],  // Soft Orange
-  [239, 68, 68, 150],   // Translucent High-Risk Red (streets stay visible underneath!)
-  [185, 28, 28, 175],   // Translucent Crimson Core
+  [16, 185, 129, 10],   // 0–16%: Barely visible Emerald mist (calm residential streets)
+  [20, 184, 166, 42],   // 16–33%: Soft Teal-Green (normal urban flow)
+  [132, 204, 22, 78],   // 33–50%: Calm Lime-Green
+  [250, 204, 21, 115],  // 50–67%: Moderate Warm Yellow
+  [249, 115, 22, 150],  // 67–84%: Elevated Risk Orange
+  [239, 68, 68, 185],   // 84–100%: Critical Hotspot Red (strictly localized cores)
 ];
 
 interface DeckH3MapProps {
@@ -90,8 +95,8 @@ export default function DeckH3Map({
   // Default to Heatmap ON and subtle/toggleable Hexagons OFF (or subtle overlay) per user preference
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
   const [showHexagons, setShowHexagons] = useState<boolean>(false);
-  const [hexOpacity, setHexOpacity] = useState<number>(0.38);
-  const [heatmapRadius, setHeatmapRadius] = useState<number>(115);
+  const [hexOpacity, setHexOpacity] = useState<number>(0.32);
+  const [heatmapRadius, setHeatmapRadius] = useState<number>(78);
 
   const [viewState, setViewState] = useState({
     longitude: 19.054,
@@ -167,42 +172,28 @@ export default function DeckH3Map({
     });
   }, [cells]);
 
-  // Sub-sample 19 points per H3 hexagon (center + 6 mid-ring + 6 vertices + 6 edge midpoints)
-  // so even when deeply zoomed in (zoom 14–16), adjacent cells form a completely seamless, silky-smooth surface!
+  // Non-linear risk weighting (`Math.pow(risk, 2.25)`) + 7-point gentle interpolation:
+  // Keeps low/medium-risk areas (10%–35%) calm green/yellow and restricts red strictly to true >=60% blackspots.
   const smoothedHeatmapPoints = useMemo(() => {
     const pts: Array<{ position: [number, number]; weight: number }> = [];
     for (const cell of cellsWithBoundaries) {
-      const baseWeight = Math.max(0.05, cell.risk_score);
+      const nonLinearWeight = Math.pow(Math.max(0.03, cell.risk_score), 2.25);
       // 1. Center point
       pts.push({
         position: [cell.center_lng, cell.center_lat],
-        weight: baseWeight,
+        weight: nonLinearWeight,
       });
 
+      // 2. 6 inner mid-ring points (halfway to vertices) for smooth continuity without saturating the whole map
       const poly = cell.polygon;
       for (let i = 0; i < poly.length; i++) {
         const [vLng, vLat] = poly[i];
-        const [nextLng, nextLat] = poly[(i + 1) % poly.length];
-
-        // 2. Inner mid-ring point (50% from center to vertex)
         pts.push({
           position: [
             (cell.center_lng + vLng) * 0.5,
             (cell.center_lat + vLat) * 0.5,
           ],
-          weight: baseWeight * 0.9,
-        });
-
-        // 3. Outer vertex point
-        pts.push({
-          position: [vLng, vLat],
-          weight: baseWeight * 0.75,
-        });
-
-        // 4. Outer edge midpoint
-        pts.push({
-          position: [(vLng + nextLng) * 0.5, (vLat + nextLat) * 0.5],
-          weight: baseWeight * 0.75,
+          weight: nonLinearWeight * 0.65,
         });
       }
     }
@@ -210,18 +201,18 @@ export default function DeckH3Map({
   }, [cellsWithBoundaries]);
 
   // Automatically scale heatmap pixel radius with zoom so it stays connected when zooming in,
-  // and fade intensity slightly at street level (zoom >= 14) so street names & buildings remain crisp.
+  // and keep intensity restrained so the map never turns overly red.
   const effectiveHeatmapRadius = useMemo(() => {
     const zoomDelta = Math.max(0, viewState.zoom - 12.2);
     return Math.round(
-      Math.min(260, heatmapRadius * Math.pow(1.26, Math.min(3.5, zoomDelta)))
+      Math.min(190, heatmapRadius * Math.pow(1.22, Math.min(3.5, zoomDelta)))
     );
   }, [heatmapRadius, viewState.zoom]);
 
   const effectiveHeatmapIntensity = useMemo(() => {
-    if (viewState.zoom >= 14.5) return 0.55;
-    if (viewState.zoom >= 13.5) return 0.68;
-    return 0.82;
+    if (viewState.zoom >= 14.5) return 0.38;
+    if (viewState.zoom >= 13.5) return 0.46;
+    return 0.55;
   }, [viewState.zoom]);
 
   const labelCells = useMemo(() => {
