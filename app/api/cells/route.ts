@@ -1,12 +1,43 @@
 import { NextResponse } from 'next/server';
-import { getGridCellsAndStats } from '@/lib/h3-store';
+import { getGridCellsAndStats, ingestAccidentsIntoH3Grid } from '@/lib/h3-store';
 import { hasOnnxModelBinary } from '@/lib/onnx-inference';
 import { readOsmInfrastructure } from '@/lib/osm-overpass';
+import {
+  fetchTomTomBudapestIncidents,
+  fetchBkkGtfsRtAccidentAlerts,
+} from '@/lib/live-incidents';
 
 export const dynamic = 'force-dynamic';
 
+let lastAutoSyncTime = 0;
+
 export async function GET() {
   try {
+    // Auto-sync live TomTom v5 & BKK GTFS-RT incidents once every 10 minutes when API keys are present in .env.local
+    const nowMs = Date.now();
+    const hasLiveKeys = Boolean(
+      process.env.TOMTOM_API_KEY ||
+        process.env.NEXT_PUBLIC_TOMTOM_API_KEY ||
+        process.env.BKK_API_KEY ||
+        process.env.NEXT_PUBLIC_BKK_API_KEY
+    );
+
+    if (hasLiveKeys && nowMs - lastAutoSyncTime > 10 * 60 * 1000) {
+      lastAutoSyncTime = nowMs;
+      try {
+        const [ttReport, bkkReport] = await Promise.all([
+          fetchTomTomBudapestIncidents(),
+          fetchBkkGtfsRtAccidentAlerts(),
+        ]);
+        const combined = [...ttReport.rows, ...bkkReport.rows];
+        if (combined.length > 0) {
+          await ingestAccidentsIntoH3Grid(combined);
+        }
+      } catch {
+        // Ignore transient external API errors
+      }
+    }
+
     const data = await getGridCellsAndStats();
     const modelStatus = hasOnnxModelBinary();
     const infrastructure = readOsmInfrastructure();
