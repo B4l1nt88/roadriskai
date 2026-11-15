@@ -62,12 +62,12 @@ export function riskToRgba(
 }
 
 const HEATMAP_COLOR_RANGE: [number, number, number, number][] = [
-  [16, 185, 129, 25],   // Ultra-soft Emerald outer halo
-  [52, 211, 153, 85],   // Smooth Teal-Green transition
-  [250, 204, 21, 140],  // Warm Amber-Yellow blend
-  [251, 146, 60, 185],  // Soft Vibrant Orange
-  [239, 68, 68, 220],   // Blended High-Risk Red
-  [185, 28, 28, 245],   // Deep Crimson Hotspot Core
+  [16, 185, 129, 15],   // Subtle Emerald ambient glow
+  [52, 211, 153, 55],   // Soft Teal transition
+  [250, 204, 21, 95],   // Translucent Amber-Yellow
+  [251, 146, 60, 125],  // Soft Orange
+  [239, 68, 68, 150],   // Translucent High-Risk Red (streets stay visible underneath!)
+  [185, 28, 28, 175],   // Translucent Crimson Core
 ];
 
 interface DeckH3MapProps {
@@ -167,26 +167,62 @@ export default function DeckH3Map({
     });
   }, [cells]);
 
-  // Sub-sample 7 points per H3 hexagon (center + 6 vertices) so adjacent cells blend seamlessly into a single organic heatmap cloud
+  // Sub-sample 19 points per H3 hexagon (center + 6 mid-ring + 6 vertices + 6 edge midpoints)
+  // so even when deeply zoomed in (zoom 14–16), adjacent cells form a completely seamless, silky-smooth surface!
   const smoothedHeatmapPoints = useMemo(() => {
     const pts: Array<{ position: [number, number]; weight: number }> = [];
     for (const cell of cellsWithBoundaries) {
-      const baseWeight = Math.pow(Math.max(0.06, cell.risk_score), 1.15);
-      // Center point carries main weight
+      const baseWeight = Math.max(0.05, cell.risk_score);
+      // 1. Center point
       pts.push({
         position: [cell.center_lng, cell.center_lat],
-        weight: baseWeight * 1.4,
+        weight: baseWeight,
       });
-      // 6 boundary vertices carry halo weight to bridge gaps between neighboring H3 cells
-      for (const [lng, lat] of cell.polygon) {
+
+      const poly = cell.polygon;
+      for (let i = 0; i < poly.length; i++) {
+        const [vLng, vLat] = poly[i];
+        const [nextLng, nextLat] = poly[(i + 1) % poly.length];
+
+        // 2. Inner mid-ring point (50% from center to vertex)
         pts.push({
-          position: [lng, lat],
-          weight: baseWeight * 0.55,
+          position: [
+            (cell.center_lng + vLng) * 0.5,
+            (cell.center_lat + vLat) * 0.5,
+          ],
+          weight: baseWeight * 0.9,
+        });
+
+        // 3. Outer vertex point
+        pts.push({
+          position: [vLng, vLat],
+          weight: baseWeight * 0.75,
+        });
+
+        // 4. Outer edge midpoint
+        pts.push({
+          position: [(vLng + nextLng) * 0.5, (vLat + nextLat) * 0.5],
+          weight: baseWeight * 0.75,
         });
       }
     }
     return pts;
   }, [cellsWithBoundaries]);
+
+  // Automatically scale heatmap pixel radius with zoom so it stays connected when zooming in,
+  // and fade intensity slightly at street level (zoom >= 14) so street names & buildings remain crisp.
+  const effectiveHeatmapRadius = useMemo(() => {
+    const zoomDelta = Math.max(0, viewState.zoom - 12.2);
+    return Math.round(
+      Math.min(260, heatmapRadius * Math.pow(1.26, Math.min(3.5, zoomDelta)))
+    );
+  }, [heatmapRadius, viewState.zoom]);
+
+  const effectiveHeatmapIntensity = useMemo(() => {
+    if (viewState.zoom >= 14.5) return 0.55;
+    if (viewState.zoom >= 13.5) return 0.68;
+    return 0.82;
+  }, [viewState.zoom]);
 
   const labelCells = useMemo(() => {
     if (!showRiskLabels) return [];
@@ -204,7 +240,7 @@ export default function DeckH3Map({
   const layers = useMemo(() => {
     const activeLayers: unknown[] = [];
 
-    // 1. Smooth Continuous Risk Heatmap Layer (Primary visual mode, multi-point blended)
+    // 1. Smooth Continuous Risk Heatmap Layer (MEAN aggregation + zoom-adaptive radius prevents spotty blobs on zoom-in)
     if (showHeatmap && smoothedHeatmapPoints.length > 0) {
       activeLayers.push(
         new HeatmapLayer<(typeof smoothedHeatmapPoints)[number]>({
@@ -213,11 +249,11 @@ export default function DeckH3Map({
           pickable: false,
           getPosition: (d) => d.position,
           getWeight: (d) => d.weight,
-          radiusPixels: heatmapRadius,
-          intensity: 0.9,
-          threshold: 0.01,
+          radiusPixels: effectiveHeatmapRadius,
+          intensity: effectiveHeatmapIntensity,
+          threshold: 0.02,
           colorRange: HEATMAP_COLOR_RANGE,
-          aggregation: 'SUM',
+          aggregation: 'MEAN',
           weightsTextureSize: 512,
           updateTriggers: {
             getWeight: [smoothedHeatmapPoints],
@@ -483,13 +519,14 @@ export default function DeckH3Map({
     cells,
     cellsWithBoundaries,
     smoothedHeatmapPoints,
+    effectiveHeatmapRadius,
+    effectiveHeatmapIntensity,
     cellLookup,
     infrastructure,
     labelCells,
     showHeatmap,
     showHexagons,
     hexOpacity,
-    heatmapRadius,
     extruded3D,
     selectedCell,
     showRiskLabels,
